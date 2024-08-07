@@ -1,15 +1,15 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::Arc,
+    time::{Instant},
+};
 
 use colored::*;
-use drillx::{
-    equix::{self},
-    Hash, Solution,
-};
+use drillx::{equix::{self}, Hash, Solution};
 use ore_api::{
     consts::{BUS_ADDRESSES, BUS_COUNT, EPOCH_DURATION},
     state::{Config, Proof},
 };
-use rand::Rng;
+use rand::{Rng, thread_rng};
 use solana_program::pubkey::Pubkey;
 use solana_rpc_client::spinner;
 use solana_sdk::signer::Signer;
@@ -45,19 +45,20 @@ impl Miner {
             let cutoff_time = self.get_cutoff(proof, args.buffer_time).await;
 
             // Run drillx
+            let max_difficulty = std::cmp::max(args.difficulty, config.min_difficulty);
             let solution = Self::find_hash_par(
                 proof,
                 cutoff_time,
                 args.threads,
                 config.min_difficulty as u32,
-                max(args.difficulty, config.min_difficulty)as u32,
+                max_difficulty as u32,
             )
-            .await;
+           .await;
 
             // Submit most difficult hash
             let mut compute_budget = 500_000;
             let mut ixs = vec![ore_api::instruction::auth(proof_pubkey(signer.pubkey()))];
-            if self.should_reset(config).await && rand::thread_rng().gen_range(0..100).eq(&0) {
+            if self.should_reset(config).await && thread_rng().gen_range(0..100).eq(&0) {
                 compute_budget += 100_000;
                 ixs.push(ore_api::instruction::reset(signer.pubkey()));
             }
@@ -68,8 +69,8 @@ impl Miner {
                 solution,
             ));
             self.send_and_confirm(&ixs, ComputeBudget::Fixed(compute_budget), false)
-                .await
-                .ok();
+               .await
+               .ok();
         }
     }
 
@@ -78,12 +79,13 @@ impl Miner {
         cutoff_time: u64,
         threads: u64,
         min_difficulty: u32,
+        max_difficulty: u32,
     ) -> Solution {
         // Dispatch job to each thread
         let progress_bar = Arc::new(spinner::new_progress_bar());
         progress_bar.set_message("Mining...");
         let handles: Vec<_> = (0..threads)
-            .map(|i| {
+           .map(|i| {
                 std::thread::spawn({
                     let proof = proof.clone();
                     let progress_bar = progress_bar.clone();
@@ -133,7 +135,7 @@ impl Miner {
                     }
                 })
             })
-            .collect();
+           .collect();
 
         // Join handles and return best nonce
         let mut best_nonce = 0;
@@ -175,20 +177,20 @@ impl Miner {
     async fn should_reset(&self, config: Config) -> bool {
         let clock = get_clock(&self.rpc_client).await;
         config
-            .last_reset_at
-            .saturating_add(EPOCH_DURATION)
-            .saturating_sub(5) // Buffer
-            .le(&clock.unix_timestamp)
+           .last_reset_at
+           .saturating_add(EPOCH_DURATION)
+           .saturating_sub(5) // Buffer
+           .le(&clock.unix_timestamp)
     }
 
     async fn get_cutoff(&self, proof: Proof, buffer_time: u64) -> u64 {
         let clock = get_clock(&self.rpc_client).await;
         proof
-            .last_hash_at
-            .saturating_add(60)
-            .saturating_sub(buffer_time as i64)
-            .saturating_sub(clock.unix_timestamp)
-            .max(0) as u64
+           .last_hash_at
+           .saturating_add(60)
+           .saturating_sub(buffer_time as i64)
+           .saturating_sub(clock.unix_timestamp)
+           .max(0) as u64
     }
 }
 
