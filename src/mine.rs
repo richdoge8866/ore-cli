@@ -15,7 +15,7 @@ use solana_rpc_client::spinner;
 use solana_sdk::signer::Signer;
 
 use crate::{
-    args::MineArgs,
+    args::{MineArgs},
     send_and_confirm::ComputeBudget,
     utils::{amount_u64_to_string, get_clock, get_config, get_proof_with_authority, proof_pubkey},
     Miner,
@@ -45,13 +45,14 @@ impl Miner {
             let cutoff_time = self.get_cutoff(proof, args.buffer_time).await;
 
             // Run drillx
-            let max_difficulty = std::cmp::max(args.difficulty, config.min_difficulty);
+            // 计算最大难度值
+            let max_difficulty = std::cmp::max(args.difficulty, config.min_difficulty as u32);
             let solution = Self::find_hash_par(
                 proof,
                 cutoff_time,
                 args.threads,
                 config.min_difficulty as u32,
-                max_difficulty as u32,
+                max_difficulty,
             )
            .await;
 
