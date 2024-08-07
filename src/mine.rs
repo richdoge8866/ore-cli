@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Instant},
-};
+use std::{sync::Arc, sync::RwLock, time::Instant};
 
 use colored::*;
 use drillx::{
@@ -36,24 +33,26 @@ impl Miner {
         // Start mining loop
         loop {
             // Fetch proof
+            let config = get_config(&self.rpc_client).await;
             let proof = get_proof_with_authority(&self.rpc_client, signer.pubkey()).await;
             println!(
-                "\nStake balance: {} ORE",
-                amount_u64_to_string(proof.balance)
+                "\nStake: {} ORE\n  Multiplier: {:12}x",
+                amount_u64_to_string(proof.balance),
+                calculate_multiplier(proof.balance, config.top_balance)
             );
 
             // Calc cutoff time
             let cutoff_time = self.get_cutoff(proof, args.buffer_time).await;
 
             // Run drillx
-            let config = get_config(&self.rpc_client).await;
             let solution = Self::find_hash_par(
                 proof,
                 cutoff_time,
                 args.threads,
                 config.min_difficulty as u32,
+                max(args.difficulty, config.min_difficulty)as u32,
             )
-           .await;
+            .await;
 
             // Submit most difficult hash
             let mut compute_budget = 500_000;
@@ -69,8 +68,8 @@ impl Miner {
                 solution,
             ));
             self.send_and_confirm(&ixs, ComputeBudget::Fixed(compute_budget), false)
-               .await
-               .ok();
+                .await
+                .ok();
         }
     }
 
@@ -80,14 +79,13 @@ impl Miner {
         threads: u64,
         min_difficulty: u32,
     ) -> Solution {
-        // 提升后的最小难度，假设原来 min_difficulty 基础上增加 8
-        let increased_min_difficulty = min_difficulty + 8;
-
         // Dispatch job to each thread
         let progress_bar = Arc::new(spinner::new_progress_bar());
         progress_bar.set_message("Mining...");
+        let global_best_difficulty = Arc::new(RwLock::new(0u32));
         let handles: Vec<_> = (0..threads)
-           .map(|i| {
+            .map(|i| {
+                let global_best_difficulty = Arc::clone(&global_best_difficulty);
                 std::thread::spawn({
                     let proof = proof.clone();
                     let progress_bar = progress_bar.clone();
@@ -110,19 +108,32 @@ impl Miner {
                                     best_nonce = nonce;
                                     best_difficulty = difficulty;
                                     best_hash = hx;
+                                    if best_difficulty.gt(&*global_best_difficulty.read().unwrap()) {
+                                        *global_best_difficulty.write().unwrap() = best_difficulty;
+                                    }
                                 }
                             }
 
-// Exit if time has elapsed
+                            // Exit if time has elapsed
                             if nonce % 100 == 0 {
+                                let global_best_difficulty = *global_best_difficulty.read().unwrap();
                                 if timer.elapsed().as_secs().ge(&cutoff_time) {
-                                    if best_difficulty.gt(&increased_min_difficulty) {
+                                    if i == 0 {
+                                        progress_bar.set_message(format!(
+                                            "Mining... ({} / {} difficulty)",
+                                            global_best_difficulty,
+                                            min_difficulty,
+                                        ));
+                                    }
+                                    if global_best_difficulty.ge(&min_difficulty) {
                                         // Mine until min difficulty has been met
                                         break;
                                     }
                                 } else if i == 0 {
                                     progress_bar.set_message(format!(
-                                        "Mining... ({} sec remaining)",
+                                        "Mining... ({} / {} difficulty, {} sec remaining)",
+                                        global_best_difficulty,
+                                        min_difficulty,
                                         cutoff_time.saturating_sub(timer.elapsed().as_secs()),
                                     ));
                                 }
@@ -137,7 +148,7 @@ impl Miner {
                     }
                 })
             })
-           .collect();
+            .collect();
 
         // Join handles and return best nonce
         let mut best_nonce = 0;
@@ -179,21 +190,25 @@ impl Miner {
     async fn should_reset(&self, config: Config) -> bool {
         let clock = get_clock(&self.rpc_client).await;
         config
-           .last_reset_at
-           .saturating_add(EPOCH_DURATION)
-           .saturating_sub(5) // Buffer
-           .le(&clock.unix_timestamp)
+            .last_reset_at
+            .saturating_add(EPOCH_DURATION)
+            .saturating_sub(5) // Buffer
+            .le(&clock.unix_timestamp)
     }
 
     async fn get_cutoff(&self, proof: Proof, buffer_time: u64) -> u64 {
         let clock = get_clock(&self.rpc_client).await;
         proof
-           .last_hash_at
-           .saturating_add(60)
-           .saturating_sub(buffer_time as i64)
-           .saturating_sub(clock.unix_timestamp)
-           .max(0) as u64
+            .last_hash_at
+            .saturating_add(60)
+            .saturating_sub(buffer_time as i64)
+            .saturating_sub(clock.unix_timestamp)
+            .max(0) as u64
     }
+}
+
+fn calculate_multiplier(balance: u64, top_balance: u64) -> f64 {
+    1.0 + (balance as f64 / top_balance as f64).min(1.0f64)
 }
 
 // TODO Pick a better strategy (avoid draining bus)
