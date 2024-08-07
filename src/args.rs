@@ -76,6 +76,7 @@ pub struct MineArgs {
         default_value = "5"
     )]
     pub buffer_time: u64,
+    pub difficulty: u32, // 添加 difficulty 字段 }
 }
 
 #[derive(Parser, Debug)]
