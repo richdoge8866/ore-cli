@@ -45,7 +45,6 @@ impl Miner {
             let cutoff_time = self.get_cutoff(proof, args.buffer_time).await;
 
             // Run drillx
-            // 计算最大难度值
             let max_difficulty = std::cmp::max(args.difficulty, config.min_difficulty as u32);
             let solution = Self::find_hash_par(
                 proof,
@@ -105,7 +104,8 @@ impl Miner {
                                 &nonce.to_le_bytes(),
                             ) {
                                 let difficulty = hx.difficulty();
-                                if difficulty.gt(&best_difficulty) {
+                                // 只处理难度大于等于最大难度的哈希
+                                if difficulty >= max_difficulty && difficulty > best_difficulty {
                                     best_nonce = nonce;
                                     best_difficulty = difficulty;
                                     best_hash = hx;
@@ -115,7 +115,7 @@ impl Miner {
                             // Exit if time has elapsed
                             if nonce % 100 == 0 {
                                 if timer.elapsed().as_secs().ge(&cutoff_time) {
-                                    if best_difficulty.ge(&min_difficulty) {
+                                    if best_difficulty >= min_difficulty {
                                         // Mine until min difficulty has been met
                                         break;
                                     }
